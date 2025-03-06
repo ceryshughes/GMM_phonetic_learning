@@ -1,5 +1,7 @@
 # Program defining the Language, Learner, Category classes and the ARI and plot methods
 # General structures used for running vowel inventory evolution simulations
+import math
+
 import numpy as np
 from sklearn import mixture
 from sklearn.metrics import adjusted_rand_score
@@ -7,6 +9,7 @@ import matplotlib as mpl
 import matplotlib.pyplot as plt
 import itertools
 from scipy import linalg
+from scipy.stats import multivariate_normal
 
 np.random.seed(1)  # Set numpy's random seed
 
@@ -48,14 +51,49 @@ class Category:
 
     def sample(self, num_samples, seed):
         """Returns num_samples (int) number of random samples from the distribution defined by
-         self.mean and self.cov
+         self.mean and self.cov (in numpy array)
         num_samples: number of samples per category
         seed: random seed for sample generation
         Returned random samples are a num_samples x 2 numpy array
         """
         # print(self.cov)
         np.random.seed(seed)
-        return np.random.default_rng().multivariate_normal(self.mean, self.cov, num_samples)
+        return np.random.default_rng(seed=seed).multivariate_normal(self.mean, self.cov, num_samples)
+
+    def shift_sample(self, num_samples:int, seed:int, bias:float):
+        """
+        Returns num_samples number of random samples from the distribution defined by self.mean and
+        self.cov with each sample along the nasality dimension shifted by "bias" amount
+        :param num_samples: number of samples
+        :param seed: random seed for sample generation
+        :param bias: size of bias
+        :return: numpy array of shifted samples
+        """
+        sample = self.sample(num_samples, seed)
+        sample[:, 0] += bias
+        return sample
+
+    def threshold_shift_sample(self, num_samples:int, seed:int, shift:float, threshold:float):
+        """
+
+        Returns num_samples number of random samples from the distribution defined by self.mean and
+        self.cov with each sample along the nasality dimension shifted by "bias" amount, if the sample's
+        height is below threshold
+        :param num_samples: number of samples
+        :param seed: random seed for sample generation
+        :param shift: size of bias
+        :param threshold height value resulting in a biased nasality sample
+        :return: numpy array of shifted samples
+        """
+        sample = self.sample(num_samples, seed)
+        boolean_mask = sample[:,1] < threshold #Get heights lower than threshold
+        sample[boolean_mask, 0] += shift # Add bias to nasality for the samples with those heights
+        return sample
+        # if self.mean[1] < threshold:
+        #     return self.shift_sample(num_samples, seed=seed, bias=bias)
+        # else:
+        #     return self.sample(num_samples, seed=seed)
+
 
     def __str__(self):
         return "Mean:" + str(self.mean) + " " + "Covariance:" + str(self.cov)
@@ -70,28 +108,45 @@ class Language:
     sampling from them (sample),
     """
 
-    def __init__(self, vowels=None, name=None):
+    def __init__(self, vowels=None, name=None, priors = None):
         """
         Initializes LanguageInput with vowel categories
         :param vowels If vowels is None, initializes LanguageInput with empty list of vowel categories
         :param name optional string name for labeling this language
         """
         self.vowels = vowels if vowels else []
+        self.priors = priors
         self.name = name
 
-    def sample(self, num_samples_per_cat, seed, get_labels=False):
+    def sample(self, num_samples_per_cat, seed, get_labels=False, shift=None, threshold=None, shift_categories=None):
         """
         Samples num_samples_per_cat vowels per vowel category in self.vowels
         :param num_samples_per_cat: int, number of samples to generate of each vowel category
         :param seed: int, random seed to use in sampling
         :param get_labels: Boolean, whether to return a data structure with category labels
+        :param shift: If not None, the amount to shift nasality samples by, if they meet threshold
+        :param threshold: If not None, the height value required of a sample for its nasality values to be biased
+        :param shift_categories: If not None, the list of category names (str) that should be shifted by shift amount
         :return: numpy array of shape num_samples_per_cat * number of categories x 2;
          if labels, also return array of shape num samples per cat * number of categories * 1
 
         """
-        samples = np.concatenate(tuple([vowel.sample(num_samples_per_cat, seed=seed) for vowel in self.vowels]))
-        if debug:
-            print("Samples:", samples)
+        assert (shift and threshold) or (not shift and not threshold), "Shift and threshold must both or neither be None"
+
+        if self.priors is not None and threshold:
+            samples = np.concatenate(tuple(
+                [vowel.threshold_shift_sample(math.floor(num_samples_per_cat * self.priors[index]), seed=seed, threshold=threshold, shift=shift) for
+                 index,vowel in enumerate(self.vowels)]))
+        elif self.priors is not None and shift_categories:
+            #Todo: complete category shift logic
+            samples = np.concatenate(tuple(
+                [vowel.threshold_shift_sample(math.floor(num_samples_per_cat * self.priors[index]), seed=seed, threshold=threshold, shift=shift) for
+                 index,vowel in enumerate(self.vowels)]))
+        elif shift:
+            samples = np.concatenate(tuple([vowel.threshold_shift_sample(num_samples_per_cat, seed=seed, threshold=threshold, shift=shift) for vowel in self.vowels]))
+        else:
+            samples = np.concatenate(tuple([vowel.sample(num_samples_per_cat, seed=seed) for vowel in self.vowels]))
+
         if not get_labels:
             return samples
         label_array = np.concatenate(tuple([[index] * num_samples_per_cat for index, vowel in enumerate(self.vowels)]))
@@ -99,17 +154,20 @@ class Language:
             print("Labels:", get_labels)
         return samples, label_array
 
-    def plot_categories(self, savefilename=None, title=None, xrange=(-10, 10), yrange=(-10, 10)):
+    def plot_categories(self, savefilename=None, title=None, xrange=(-10, 10), yrange=(-10, 10), showSamples=False, seed=1):
         """
         Plots an ellipse based on each category's mean and covariance
         Each category is shown in a different color (up to 5 colors)
         Based on the Gaussian Mixture plotting example on scikit learn's website
-        :param savefilename If not None, the string filename to save the plot to
+        :param savefilename If not None, the string filename to save the plot to instead of displaying during execution
         :param title If not None, the string title to put on the plot. If None, uses self.name. If self.name is None, plot is untitled
         :param xrange: float tuple, x-axis range of plot (nasality): (min, max)
         :param yrange: float tuple, y-axis range of plot (height): (min, max)
+        :param showSamples: boolean, whether to show samples from categories
+        :param seed: seed for sampling datapoints if showSamples
         :return: None
         """
+
 
         # Colors to go through
         color_iter = itertools.cycle(["navy", "c", "cornflowerblue", "gold", "darkorange"])
@@ -129,9 +187,9 @@ class Language:
             angle = np.arctan(u[1] / u[0])
             angle = 180.0 * angle / np.pi  # convert to degrees
             ell = mpl.patches.Ellipse(mean, v[0], v[1], angle=180.0 + angle, color=color)
-            if debug:
-                X = np.random.default_rng().multivariate_normal(mean, covar, 100)
-                print(mean, X)
+            if showSamples:
+                X = np.random.default_rng(seed).multivariate_normal(mean, covar, 100)
+                #print(mean, X)
                 plt.scatter(X[:,0],X[:,1], color=color)
             # ell.set_clip_box(splot.bbox)
             ax = plt.gca()
@@ -148,7 +206,9 @@ class Language:
             plt.title(self.name)
         if savefilename:
             plt.savefig(savefilename)
-        plt.show()
+            plt.close()
+        else:
+            plt.show()
 
     def __str__(self):
         return "\n".join([str(vowel) + "\n" for vowel in self.vowels])
@@ -179,7 +239,9 @@ class Learner:
                  param_init: str = 'kmeans',
                  max_iters = 100,
                  seed: int = 1,
-                 name: str = None):
+                 name: str = None,
+                 contextless_bias: float = None,
+                 threshold: float = None):
         """
         Initializes a Learner object with the following properties
         :param inputLanguage: Language object that generates the learning input
@@ -191,6 +253,8 @@ class Learner:
         :param max_iters: maximum number of iterations allowed to reach convergence
         :param seed:  random seed
         :param name: optional string name for this learner
+        :param contextless_bias: Value to shift learning input samples by along the nasality dimension, if they fall below the height threshold
+        :param threshold: Value where learning input samples with a height below this value are shifted in nasality by bias
 
         Runs the learner with the input language and creates the following properties:
         dpgmm: BayesianGaussianMixture object fit to samples from the inputLanugae (numSamples samples per category)
@@ -206,10 +270,21 @@ class Learner:
         self.max_iters = max_iters
         self.seed = seed
         self.name = name
+        self.contextless_bias = contextless_bias
+        self.threshold = threshold
+        self.effective_cats = None
+        self.category_counts = None
+        self.ari = None
 
 
         # Generate samples from input language
-        samples = self.inputLanguage.sample(self.numSamples, seed = self.seed)
+
+        #Perception bias
+        if self.contextless_bias:
+            self.samples, self.labels = self.inputLanguage.sample(self.numSamples, seed=self.seed, shift=self.contextless_bias, threshold=self.threshold, get_labels=True)
+        #No perception bias
+        else:
+            self.samples, self.labels = self.inputLanguage.sample(self.numSamples, seed = self.seed, get_labels=True)
 
         # Fit model
         self.dpgmm = mixture.BayesianGaussianMixture(weight_concentration_prior=self.concentration,
@@ -219,12 +294,13 @@ class Learner:
                                                      max_iter=self.max_iters,
                                                      random_state=self.seed
                                                      )
-        self.dpgmm.fit(samples)
+        self.dpgmm.fit(self.samples)
+
 
         # Format learned categories
         learned_vowels = [Category(mean, self.dpgmm.covariances_[index]) for index, mean in
                           enumerate(self.dpgmm.means_)]
-        self.learnedLanguage = Language(learned_vowels)
+        self.learnedLanguage = Language(learned_vowels, priors=self.dpgmm.weights_)
 
         if debug:
             print("Model name:", name)
@@ -239,35 +315,73 @@ class Learner:
         :param labels: None, or 1-D array of cluster labels: correct sample labels to compare against. Must be same length as samples
         :return: the ARI for this learner's predictions
         """
+        if self.ari: #Just re-use this value if already computed
+            return self.ari
         if not samples:
-            samples, labels = self.inputLanguage.sample(self.numSamples, seed=self.seed, get_labels=True)
+            #samples, labels = self.inputLanguage.sample(self.numSamples, seed=self.seed, get_labels=True)
+            samples = self.samples
+            labels = self.labels #Re-use samples to save computation
         predicted_labels = self.dpgmm.predict(samples)
         ari = adjusted_rand_score(labels, predicted_labels)
         if debug:
             print("Predicted", predicted_labels)
             print("Actual", labels)
             print("ARI", ari)
-        return ari
+        self.ari = ari
+        return self.ari
+
+    def evaluate_height_categories_ari(self):
+        """
+        Returns the ARI between model predicted categories and the categories predicted by the input language, modified so
+        to ignore nasality (all input language categories set to have the mean same nasality)
+        :return: float
+        """
+        #Evaluate against input language's height categories, equalizing nasal means to average
+        average_nasality = np.mean([vowel.mean[0] for vowel in self.inputLanguage.vowels])
+        flat_nasal_input_vowels = [Category(vowel.mean, vowel.cov) for vowel in self.inputLanguage.vowels]
+        for vowel in flat_nasal_input_vowels:
+            vowel.mean[0] = average_nasality
+        input_height_cats = [multivariate_normal(mean=cat.mean, cov=cat.cov) for cat in flat_nasal_input_vowels]
+
+        # Get index of category that has the highest likelihood for each sample
+        max_likelihood_labels = [
+            max(*[(index, cat.pdf(sample)) for index, cat in enumerate(input_height_cats)], key=lambda item: item[1]) for sample in
+            self.samples]
+        input_height_labels = [max_likelihood_label[0] for max_likelihood_label in max_likelihood_labels]
+
+        #Get predicted categories from learned model
+        model_labels = self.dpgmm.predict(self.samples)
+
+        return adjusted_rand_score(labels_true=input_height_labels, labels_pred=model_labels)
 
     def effective_categories(self):
         """
         Returns only the categories in self.learnedLanguage predicted as labels for a sample from self.inputLanguage
+        Also computes the number of samples (given this.inputLanguage and this.seed) predicted to be in each category (by maximum probability)
         :return: list of Category
         """
-        sample = self.inputLanguage.sample(self.numSamples, seed=self.seed)
+        if self.effective_cats: #Just reuse this value if already computed
+            return self.effective_cats
+
+        #sample = self.inputLanguage.sample(self.numSamples, seed=self.seed, shift=self.contextless_bias, threshold=self.threshold)
+        sample = self.samples
         predicted_label = self.dpgmm.predict(sample)
         means = self.dpgmm.means_
         covs = self.dpgmm.covariances_
+        category_counts = {}
         categories = []
         for index, (mean, cov) in enumerate(zip(means, covs)):
+            category_counts[index] = np.sum(predicted_label == index)
             if not np.any(predicted_label == index):
                 continue
             categories.append(Category(mean, cov))
-        return categories
+        self.category_counts = category_counts
+        self.effective_cats = categories
+        return self.effective_cats
 
 
 
-    def plot_predictions(self, xrange=(-10, 10), yrange=(-10, 10),title=None):
+    def plot_predictions(self, xrange=(-10, 10), yrange=(-10, 10),title=None, savefilename=None):
         """
         Creates a color-labeled scatterplot of self.dpgmm's predicted categorizations
         on a sample from self.inputLanguagePlots
@@ -277,15 +391,18 @@ class Learner:
         :param xrange tuple of minimum x axis value, maximum x axis value
         :param yrange tuple of minimum y axis value, maximum y axis value
         :param title If not None, the string title to put on the plot. If None, uses self.name. If self.name is None, plot is untitled
+        :param savefilename If not None, the string filename to save the plot to, instead of displaying during execution
         :return: None
         """
-        X = self.inputLanguage.sample(self.numSamples, seed = self.seed)
+       # X = self.inputLanguage.sample(self.numSamples, seed = self.seed)
+        X = self.samples
         Y_ = self.dpgmm.predict(X)
         means = [vowel.mean for vowel in self.learnedLanguage.vowels]
+        #print(Y_)
         covariances = [vowel.cov for vowel in self.learnedLanguage.vowels]
         color_iter = itertools.cycle(["navy", "c", "cornflowerblue", "gold", "darkorange"])
-        for i, (mean, covar, color) in enumerate(zip(means, covariances, color_iter)):
-            v, w = linalg.eigh(covar)
+        for i, mean in enumerate(means):
+            v, w = linalg.eigh(covariances[i])
             v = 2.0 * np.sqrt(2.0) * np.sqrt(v)
             u = w[0] / linalg.norm(w[0])
             # as the DP will not use every component it has access to
@@ -293,15 +410,15 @@ class Learner:
             # components.
             if not np.any(Y_ == i):
                 continue
-            plt.scatter(X[Y_ == i, 0], X[Y_ == i, 1], 0.8, color=color)
+            plt.scatter(X[Y_ == i, 0], X[Y_ == i, 1], 0.8, color=next(color_iter))
 
             # Plot an ellipse to show the Gaussian component
             angle = np.arctan(u[1] / u[0])
             angle = 180.0 * angle / np.pi  # convert to degrees
-            ell = mpl.patches.Ellipse(mean, v[0], v[1], angle=180.0 + angle, color=color)
+            ell = mpl.patches.Ellipse(mean, v[0], v[1], angle=180.0 + angle, color=next(color_iter))
             # ell.set_clip_box(splot.bbox)
             ax = plt.gca()
-            ell.set_alpha(0.5)
+            ell.set_alpha(self.dpgmm.weights_[i])
             ax.add_patch(ell)
 
         plt.xlim(xrange[0], xrange[1])
@@ -312,8 +429,19 @@ class Learner:
             plt.title(title)
         elif self.name:
             plt.title(self.name)
-        plt.show()
 
+        if savefilename:
+            plt.savefig(savefilename)
+            plt.close()
+        else:
+            plt.show()
+
+    def __str__(self):
+        converged = "converged" if self.dpgmm.converged_ else "not converged"
+        num_cats = "Number of categories:" + str(len(self.effective_categories()))
+        categories = "\n".join([str(cat.mean) for cat in self.effective_categories()])
+        properties = [self.name, converged, num_cats, categories] if self.name else [converged, num_cats, categories]
+        return "\n".join(properties)
 
 
 

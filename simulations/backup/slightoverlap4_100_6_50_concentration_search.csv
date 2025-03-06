@@ -1,0 +1,4 @@
+Concentration,Mean ARI,ARI standard dev,Percent converged,Mean number of categories,Number of categories standard dev,MaxIters,Samples,MaxCats
+1e-13,0.77352683452203,0.0,1.0,4.0,0.0,100,50,6
+0.16666666666666666,0.77352683452203,0.0,1.0,4.0,0.0,100,50,6
+0.9,0.77352683452203,0.0,1.0,4.0,0.0,100,50,6

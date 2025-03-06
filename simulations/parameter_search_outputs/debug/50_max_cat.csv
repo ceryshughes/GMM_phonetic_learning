@@ -1,0 +1,4 @@
+Concentration,Mean ARI,ARI standard dev,Percent converged,Mean number of categories,Number of categories standard dev
+0.0004,0.7975718186703933,0.03352499170271915,1.0,4.1,0.3
+0.02,0.7975718186703933,0.03352499170271915,1.0,4.1,0.3
+0.04,0.7975718186703933,0.03352499170271915,1.0,4.1,0.3
