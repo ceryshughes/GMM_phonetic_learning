@@ -2,6 +2,7 @@
 import itertools
 import math
 import os
+import re
 
 import scipy
 import scipy.linalg
@@ -14,6 +15,8 @@ import pathlib
 from sklearn import mixture
 from sklearn.metrics import adjusted_rand_score
 from scipy.stats import multivariate_normal
+import pandas as pd
+import glob
 
 debug = False
 
@@ -154,6 +157,29 @@ def nasal_splits(cats: list):
     return num_nasal_splits, high_splits, low_splits, other_splits
 
 
+def combine_csvs(fn: str, directory_names:list, learners: bool):
+    """
+    Creates a csv that is the concatenation of the contents of the csvs in directory_names
+    :param fn: name csv file should have
+    :param directory_names: list of string, name of directories to get csvs from
+    :param learners: True if concatenating learner csvs, False if concatenating summary csvs
+    :return: none
+    """
+    dataframes = []
+    for direc in directory_names:
+        files = glob.glob(direc+"/*")
+        for file in files:
+            if bool(re.search("_learners.csv", file)) == learners:
+                contents = pd.read_csv(file)
+                dataframes.append(contents)
+    combined = pd.concat(dataframes)
+    combined.to_csv(fn)
+
+
+
+
+
+
 
 
 
@@ -285,7 +311,7 @@ def output_learners(filename:str, learners:list, seeds_to_plot: list = None, plo
 #         }
 #     output_to_csv(concentration_run_data, outputFile, "Concentration")
 
-#note: Bayesian modeling perspective: some just optimization stuff, some interesting modeling predictions (prior, amount of data)
+#note: Bayesian modeling perspective: some hyperparams are just optimization stuff, some are interesting modeling predictions (prior, amount of data)
 def param_search(inputLanguage:Language,
                  outputFile:str,
                  concentration_trials:list = None,
@@ -298,7 +324,7 @@ def param_search(inputLanguage:Language,
                  maxIters:int = 100,
                  numSeeds=10,
                  view_learners = False,
-                 seeds_to_view = []):
+                 seeds_to_view = None):
     """
         -Runs a Learner across the desired parameter settings (varying either concentration prior, maximum number of categories, or
         number of samples per category taken from input language)
@@ -316,13 +342,14 @@ def param_search(inputLanguage:Language,
         :param maxIters: maximum number of learning iterations. Default 100 if not specified and maxItersList not specified
         :param numSeeds: number of seeds to try per hyperparameter value
         :param view_learners: whether to output additional csv file with information about each individual learner
-        :param seeds_to_view: If view_learners is defined, list of seeds whose learners' predictions should be plotted
+        :param seeds_to_view: If view_learners is defined, list of seeds whose learners' predictions should be plotted, saved in learner_plots directory
     """
     assert (concentration_trials and maxCats and numSamples and maxIters and not concentration) or (
             numSamplesList and maxCats and concentration and maxIters and not numSamples) or (
             maxCatsList and concentration and numSamples and maxIters and not maxCats
     ) or (maxItersList and concentration and numSamples and maxCats), "Must define a value for every hyperparameter but one, which should have a list of values to try"
 
+    seeds_to_view = seeds_to_view if seeds_to_view else []
 
     #Set up the trials to iterate over, based on what parameter has a list given
     if concentration_trials:
@@ -413,13 +440,13 @@ def param_search(inputLanguage:Language,
 
 
 
-def run_concentration_trials(language:Language, seeds_to_view=[], numSamples=250, maxIters=1000):
-    """Code for concentration parameter search
+def run_concentration_trials(language:Language, seeds_to_view= None, numSamples=250, maxIters=1000):
+    """Code for trying multiple different concentration values
     :param language: Language object to use for input. language.name should be defined
     :param seeds_to_view: list of seeds to save plots of learners' predictions
     """
     assert language.name, "Language name property must be defined"
-    maxCats=6
+    maxCats = 6
     numSeeds = 20
 
     #concentration_trials = [(1/(6**i)) for i in range(1,10)] # Look at exponentially small concentrations
@@ -430,7 +457,7 @@ def run_concentration_trials(language:Language, seeds_to_view=[], numSamples=250
     debug_str = "debug/" if debug else ""
     outfile_name = ("parameter_search_outputs/" +
                     debug_str +
-                    language.name +
+                    language.name + "/" + language.name +
                     "_" + "_".join([str(maxCats),
                                     str(numSamples),
                                     str(maxIters)])
@@ -510,7 +537,7 @@ def view_seed_samples(language, seeds, output_dir=None):
     Shows a plot for each seed in seeds with the sample of language using that(with informative title)
     :param language: Language object, language to sample from
     :param seeds: list of seeds (int)
-    :param output_fn: if not None, the string name of the directory to output plots to (each named after language name and seed)
+    :param output_dir: if not None, the string name of the directory to output plots to (each named after language name and seed)
     :return: None
     """
     for seed in seeds:
@@ -526,86 +553,107 @@ def view_seed_samples(language, seeds, output_dir=None):
 
 if __name__ == "__main__":
 
-    easy_language = define_easy_language()
-    overlap_language = define_slight_overlap_language()
-    challenge_language = define_challenge_language()
-    scikit_lang = define_scikit_example_language()
-    challenge_lang_2 = define_challenge_language_2()
-    challenge_lang_2.plot_categories(showSamples=True, seed=9)
-    challenge_sphere = define_challenge_sphere()
-    challenge_sphere.plot_categories(showSamples=True)
-
-    if debug:
-        easy_language.plot_categories(showSamples=True)
-        overlap_language.plot_categories(showSamples=True)
-        challenge_language.plot_categories(showSamples=True)
-        debug_lang = define_debug_language()
-        debug_lang.plot_categories(showSamples=True)
-        run_concentration_trials(debug_lang)
-
-        print(ideal_model(overlap_language, seed=17, numSamples=250))
-        print(ideal_model(challenge_language, seed=17, numSamples=250))
-        print(ideal_model(challenge_lang_2, seed=17, numSamples=250))
-
-        #Too big number => impossible to find right number cats?
-        #param_search(inputLanguage = overlap_language,
-        #outputFile = "parameter_search_outputs/debug/50_max_cat.csv",
-        #concentration_trials = [1/(50**2), 1/50, 1/25],
-        #numSamples= 300,
-        #maxIters = 1000, maxCats=50)
+    #Logic for some file organization after doing some searching
+    cleanup = True
+    if cleanup:
+        param_dir = "parameter_search_outputs/"
+        for dir in ["challenge", "challenge2", "challenge_sphere"]:
+            combine_csvs(fn=dir+"_summary.csv", directory_names=[param_dir+dir],
+                         learners=False)
+            combine_csvs(fn=dir + "_learners.csv", directory_names=[param_dir + dir],
+                         learners=True)
     else:
+        #Define languages
+        easy_language = define_easy_language()
+        overlap_language = define_slight_overlap_language()
+        challenge_language = define_challenge_language()
+        scikit_lang = define_scikit_example_language()
+        challenge_lang_2 = define_challenge_language_2()
+        challenge_sphere = define_challenge_sphere()
 
-        #run_concentration_trials(overlap_language)
+        #Plot languages
+        seed = 9
+        numSamples = 250
+        language_output_dir = "simulated_input_distributions"
+        ideal_models_csv = open(language_output_dir+"/"+"ideal_aris.csv")
+        ideal_writer = csv.DictWriter(ideal_models_csv, fieldnames=["Language", "Seed","NumSamples","IdealARI"])
+        for language in [easy_language, overlap_language, challenge_language, scikit_lang, challenge_lang_2, challenge_sphere]:
+            language.plot_categories(showSamples=True, seed=seed, savefilename=language_output_dir+language.name)
+            ideal_writer.writerow({
+                "Language": language.name,
+                "Seed": seed,
+                "NumSamples":numSamples,
+                "IdealARI":ideal_model(language, seed, numSamples)
+            })
 
-        #Overlap language: look at seeds 17, 1 (that's where concs. are learning diff number cats)
-        #view_seed_samples(overlap_language, [17, 1])
-        #run_concentration_trials(overlap_language, seeds_to_view=[17,1,0])
+        if debug:
+            debug_lang = define_debug_language()
+            debug_lang.plot_categories(showSamples=True)
+            run_concentration_trials(debug_lang)
 
-        #Challenge language: look at seeds 17, 18
-        #run_concentration_trials(challenge_language, seeds_to_view=[17,18,0])
+            print(ideal_model(overlap_language, seed=17, numSamples=250))
+            print(ideal_model(challenge_language, seed=17, numSamples=250))
+            print(ideal_model(challenge_lang_2, seed=17, numSamples=250))
 
-        for num_samples in [250, 300, 350, 400, 450, 500]:
-            run_concentration_trials(challenge_lang_2, seeds_to_view=[0,1,17,18,9], numSamples=num_samples, maxIters=3000)
+            #Too big number => impossible to find right number cats?
+            #param_search(inputLanguage = overlap_language,
+            #outputFile = "parameter_search_outputs/debug/50_max_cat.csv",
+            #concentration_trials = [1/(50**2), 1/50, 1/25],
+            #numSamples= 300,
+            #maxIters = 1000, maxCats=50)
+        else:
 
-        for num_samples in [250, 300, 350, 400, 450, 500]:
-            run_concentration_trials(challenge_sphere, seeds_to_view=[0,1,17,18,9], numSamples=num_samples, maxIters=3000)
+            #run_concentration_trials(overlap_language)
 
-        #print(ideal_model(overlap_language,1,250))
-        # scikit_lang.plot_categories(showSamples=True)
-        # print("Trying different concentration values...")
-        # run_concentration_trials(scikit_lang)
+            #Overlap language: look at seeds 17, 1 (that's where concs. are learning diff number cats)
+            #view_seed_samples(overlap_language, [17, 1])
+            #run_concentration_trials(overlap_language, seeds_to_view=[17,1,0])
+
+            #Challenge language: look at seeds 17, 18
+            #run_concentration_trials(challenge_language, seeds_to_view=[17,18,0])
+
+            for num_samples in [250, 300, 350, 400, 450, 500]:
+                run_concentration_trials(challenge_lang_2, seeds_to_view=[0,1,17,18,9], numSamples=num_samples, maxIters=3000)
+
+            for num_samples in [250, 300, 350, 400, 450, 500]:
+                run_concentration_trials(challenge_sphere, seeds_to_view=[0,1,17,18,9], numSamples=num_samples, maxIters=3000)
+
+            #print(ideal_model(overlap_language,1,250))
+            # scikit_lang.plot_categories(showSamples=True)
+            # print("Trying different concentration values...")
+            # run_concentration_trials(scikit_lang)
+            #
+            # print("Trying different concentration values...")
+            # run_concentration_trials(overlap_language)
+
+
+
+            #print("Trying different numbers of samples...")
+            #run_numsamples_trials(overlap_language)
+
+            #print("Trying different numbers of optimization maximum iterations...")
+            #run_maxiters_trials(overlap_language)
+
+
+        #easy_language.plot_categories(showSamples=True)
+        #run_concentration_trials(easy_language)
+        # run_numsamples_trials(easy_language)
+        # run_maxiters_trials(easy_language)
+
         #
-        # print("Trying different concentration values...")
-        # run_concentration_trials(overlap_language)
+        #overlap_language.plot_categories(showSamples=True)
+        # if debug:
+        #     overlap_language.plot_categories()
+        #   concentration_trials = [.0000000000001] + [((1 / 6) + 0.05 * i) for i in range(-3, 0)] + [((1 / 6) + 0.05 * i) for i
+        #                                                                                          in range(0, 30)]
+        #   param_search(overlap_language, "parameter_search_outputs/concentration_search_debug.csv",
+        #             concentration_trials=concentration_trials, maxCats=6, numSamples=100)
 
 
 
-        #print("Trying different numbers of samples...")
+
         #run_numsamples_trials(overlap_language)
-
-        #print("Trying different numbers of optimization maximum iterations...")
         #run_maxiters_trials(overlap_language)
-
-
-    #easy_language.plot_categories(showSamples=True)
-    #run_concentration_trials(easy_language)
-    # run_numsamples_trials(easy_language)
-    # run_maxiters_trials(easy_language)
-
-    #
-    #overlap_language.plot_categories(showSamples=True)
-    # if debug:
-    #     overlap_language.plot_categories()
-    #   concentration_trials = [.0000000000001] + [((1 / 6) + 0.05 * i) for i in range(-3, 0)] + [((1 / 6) + 0.05 * i) for i
-    #                                                                                          in range(0, 30)]
-    #   param_search(overlap_language, "parameter_search_outputs/concentration_search_debug.csv",
-    #             concentration_trials=concentration_trials, maxCats=6, numSamples=100)
-
-
-
-
-    #run_numsamples_trials(overlap_language)
-    #run_maxiters_trials(overlap_language)
 
 
 

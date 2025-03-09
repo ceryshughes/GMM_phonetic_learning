@@ -37,8 +37,8 @@ class Category:
     def build_params(cls, mean_nasality: float, mean_height: float, s_nasality: float, s_height: float,
                      c_nasality_height: float):
         """
-        Defines this.mean (1d list): this.mean[0] = mean_nasality, this.mean[1] = mean_height
-        Defines this.cov (2d list): covariance matrix for height and nasality
+        Defines self.mean (1d list): self.mean[0] = mean_nasality, self.mean[1] = mean_height
+        Defines self.cov (2d list): covariance matrix for height and nasality
         :param mean_nasality: float,mean of this category on nasality dimension
         :param mean_height: float, mean of this category on height dimension
         :param s_nasality: float,variance on nasality dimension
@@ -108,17 +108,21 @@ class Language:
     sampling from them (sample),
     """
 
-    def __init__(self, vowels=None, name=None, priors = None):
+    def __init__(self, vowels:list=None, name:str=None, priors:list = None):
         """
         Initializes LanguageInput with vowel categories
         :param vowels If vowels is None, initializes LanguageInput with empty list of vowel categories
         :param name optional string name for labeling this language
+        :param priors list of relative frequency of each vowel category, in order based on the order of self.vowels.
+         If None, set to 1 for each category
         """
         self.vowels = vowels if vowels else []
         self.priors = priors
+        if self.priors is None:
+            self.priors = [1] * len(vowels)
         self.name = name
 
-    def sample(self, num_samples_per_cat, seed, get_labels=False, shift=None, threshold=None, shift_categories=None):
+    def sample(self, num_samples_per_cat, seed, get_labels=False, shift=None, threshold=None, shift_categories=None, scale=False):
         """
         Samples num_samples_per_cat vowels per vowel category in self.vowels
         :param num_samples_per_cat: int, number of samples to generate of each vowel category
@@ -127,29 +131,39 @@ class Language:
         :param shift: If not None, the amount to shift nasality samples by, if they meet threshold
         :param threshold: If not None, the height value required of a sample for its nasality values to be biased
         :param shift_categories: If not None, the list of category names (str) that should be shifted by shift amount
+        :param scale: If True, scale the number of samples per category by its corresponding value in self.priors
         :return: numpy array of shape num_samples_per_cat * number of categories x 2;
-         if labels, also return array of shape num samples per cat * number of categories * 1
+         if labels, also return array of shape num samples per cat * number of categories * 1 - a list where each item
+         is the label of the category the corresponding sample was generated from
 
         """
         assert (shift and threshold) or (not shift and not threshold), "Shift and threshold must both or neither be None"
 
-        if self.priors is not None and threshold:
-            samples = np.concatenate(tuple(
-                [vowel.threshold_shift_sample(math.floor(num_samples_per_cat * self.priors[index]), seed=seed, threshold=threshold, shift=shift) for
-                 index,vowel in enumerate(self.vowels)]))
-        elif self.priors is not None and shift_categories:
-            #Todo: complete category shift logic
-            samples = np.concatenate(tuple(
-                [vowel.threshold_shift_sample(math.floor(num_samples_per_cat * self.priors[index]), seed=seed, threshold=threshold, shift=shift) for
-                 index,vowel in enumerate(self.vowels)]))
-        elif shift:
-            samples = np.concatenate(tuple([vowel.threshold_shift_sample(num_samples_per_cat, seed=seed, threshold=threshold, shift=shift) for vowel in self.vowels]))
+        if scale: #TODO: integrate priors/scale with learner
+            adjusted_num_samples_per_cat = [math.floor(num_samples_per_cat * prior) for prior in self.priors]
         else:
-            samples = np.concatenate(tuple([vowel.sample(num_samples_per_cat, seed=seed) for vowel in self.vowels]))
+            adjusted_num_samples_per_cat = [num_samples_per_cat for vowel in self.vowels]
 
+        if threshold:
+            samples = np.concatenate(tuple(
+                [vowel.threshold_shift_sample(adjusted_num_samples_per_cat[index], seed=seed, threshold=threshold, shift=shift) for
+                 index,vowel in enumerate(self.vowels)]))
+        elif shift_categories:
+            #Todo: test category shift
+            cat_samples = []
+            for index,vowel in enumerate(self.vowels):
+                if vowel.name in shift_categories:
+                    cat_samples.append(vowel.threshold_shift_sample(adjusted_num_samples_per_cat[index], seed=seed, threshold=threshold, shift=shift))
+                else:
+                    cat_samples.append(vowel.sample(adjusted_num_samples_per_cat[index], seed=seed))
+            samples = np.concatenate(tuple(cat_samples))
+        else:
+            #samples = np.concatenate(tuple([vowel.sample(num_samples_per_cat, seed=seed) for vowel in self.vowels]))
+            samples = np.concatenate(tuple([vowel.sample(adjusted_num_samples_per_cat[index], seed=seed) for index,vowel in enumerate(self.vowels)]))
         if not get_labels:
             return samples
-        label_array = np.concatenate(tuple([[index] * num_samples_per_cat for index, vowel in enumerate(self.vowels)]))
+        #label_array = np.concatenate(tuple([[index] * num_samples_per_cat for index, vowel in enumerate(self.vowels)]))
+        label_array = np.concatenate(tuple([[index] * adjusted_num_samples_per_cat[index] for index, vowel in enumerate(self.vowels)]))
         if debug:
             print("Labels:", get_labels)
         return samples, label_array
@@ -217,17 +231,21 @@ class Language:
 class Learner:
     """
     A Learner has:
-        An input Language object
-        XXXXXA fit method
-        A learned Language object (after the fit method has been run)
-        A predict method, based ont he learned Language object (after the fit method has been run)
+        An input Language object (self.inputLanguage)
+        A learned Language object (self.learnedLanguage)
+        A fitted SciKitLearn Bayesian mixture learner (self.dpgmm)
+        An ARI score against the input language (self.ari), after evaluate_accuracy has been called
+        An ARI score based only on input language category mean height values (self.height_ari), after evaluate_height_categories_ari has been called
+        An effective number of categories - how many are used to predict the training data, maximum a posteriori (self.effective_cats), after effective_categories has been called
+        A dictionary count of how many training samples are predicted to belong to each category (self.category_counts), after effective_categories has been called
+        Optional: a bias to shift samples by (self.contextless_bias) if they fall below a given height value (self.threshold)
         A set of hyperparameter settings:
-            -number of samples per category from input language (integer greater than 0)
-            -weight concentration parameter for Dirichlet prior(float)
-            -maximum number of learned categories (integer greater than 0)
-            -covariance type (default full)
-            -parameter initialization (default kmeans)
-            -random seed (default 1)
+            -number of samples per category from input language (integer greater than 0): self.numSamples
+            -weight concentration parameter for Dirichlet prior(float): self.concentration
+            -maximum number of learned categories (integer greater than 0): self.maxCats
+            -covariance type (default full) self.covType
+            -parameter initialization (default kmeans): self.paramInit
+            -random seed (default 1): self.seed
     Wrapper for SciKitLearn's Bayesian mixture learner, for running vowel inventory simulations
     """
 
@@ -275,6 +293,7 @@ class Learner:
         self.effective_cats = None
         self.category_counts = None
         self.ari = None
+        self.height_ari = None
 
 
         # Generate samples from input language
@@ -308,9 +327,10 @@ class Learner:
 
     def evaluate_accuracy(self, samples=None, labels=None):
         """
+        If self.ari is not None, re-uses that value. Otherwise:
         Evaluates the Adjusted Rand Index for this model's predictions versus a set of 'correct' cluster labels.
         If samples and labels are both none, tests on a sample from self.inputLanguage, taking self.numSamples number
-        of samples from each category in self.inputLanguage
+        of samples from each category in self.inputLanguage.
         :param samples: None, or 2-D array of height, nasality values (one entry per sample)
         :param labels: None, or 1-D array of cluster labels: correct sample labels to compare against. Must be same length as samples
         :return: the ARI for this learner's predictions
@@ -336,6 +356,7 @@ class Learner:
         to ignore nasality (all input language categories set to have the mean same nasality)
         :return: float
         """
+        #TODO: test this function
         #Evaluate against input language's height categories, equalizing nasal means to average
         average_nasality = np.mean([vowel.mean[0] for vowel in self.inputLanguage.vowels])
         flat_nasal_input_vowels = [Category(vowel.mean, vowel.cov) for vowel in self.inputLanguage.vowels]
@@ -384,7 +405,7 @@ class Learner:
     def plot_predictions(self, xrange=(-10, 10), yrange=(-10, 10),title=None, savefilename=None):
         """
         Creates a color-labeled scatterplot of self.dpgmm's predicted categorizations
-        on a sample from self.inputLanguagePlots
+        on a sample from self.inputLanguagePlots using self.seed and self.numSamples
         as well as an ellipse based on each category's mean and covariance
         Each category is shown in a different color (up to 5 colors)
         Based on the Gaussian Mixture plotting example on scikit learn's website
