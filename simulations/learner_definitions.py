@@ -140,7 +140,7 @@ class Language:
         assert (shift and threshold) or (not shift and not threshold), "Shift and threshold must both or neither be None"
 
         if scale: #TODO: integrate priors/scale with learner
-            adjusted_num_samples_per_cat = [math.floor(num_samples_per_cat * prior) for prior in self.priors]
+            adjusted_num_samples_per_cat = [math.floor(num_samples_per_cat * len(self.vowels) * prior) for prior in self.priors]
         else:
             adjusted_num_samples_per_cat = [num_samples_per_cat for vowel in self.vowels]
 
@@ -202,12 +202,12 @@ class Language:
             angle = 180.0 * angle / np.pi  # convert to degrees
             ell = mpl.patches.Ellipse(mean, v[0], v[1], angle=180.0 + angle, color=color)
             if showSamples:
-                X = np.random.default_rng(seed).multivariate_normal(mean, covar, 100)
+                X = np.random.default_rng(seed).multivariate_normal(mean, covar, size=int(100*self.priors[i]))
                 #print(mean, X)
-                plt.scatter(X[:,0],X[:,1], color=color)
+                plt.scatter(X[:,0],X[:,1], color=color, alpha=self.priors[i])
             # ell.set_clip_box(splot.bbox)
             ax = plt.gca()
-            ell.set_alpha(0.5)
+            ell.set_alpha(self.priors[i])
             ax.add_patch(ell)
 
         plt.xlim(xrange[0], xrange[1])
@@ -232,6 +232,7 @@ class Learner:
     """
     A Learner has:
         An input Language object (self.inputLanguage)
+        A scale setting: whether sampling from the input language should be scaled by its prior for each of its categories
         A learned Language object (self.learnedLanguage)
         A fitted SciKitLearn Bayesian mixture learner (self.dpgmm)
         An ARI score against the input language (self.ari), after evaluate_accuracy has been called
@@ -251,6 +252,7 @@ class Learner:
 
     def __init__(self, inputLanguage: Language,
                  numSamples: int = 100,
+                 scale: bool = False,
                  concentration: float = None,
                  maxCats: int = 6,
                  covType: str = 'full',
@@ -264,6 +266,7 @@ class Learner:
         Initializes a Learner object with the following properties
         :param inputLanguage: Language object that generates the learning input
         :param numSamples: number of samples in learning input from each of the inputLanguage's categories
+        :param scale: whether to scale numSamples for each category by its prior in inputLanguage
         :param concentration: concentration parameter for Dirichlet prior (If None, then 1/maxCats - see SciKitLearn BayesianMixture)
         :param maxCats: maximum number of learned categories (greater than 1)
         :param covType: covariance type (see SciKit Learn's covariance type options for Bayesian mixture)
@@ -281,6 +284,7 @@ class Learner:
         """
         self.inputLanguage = inputLanguage
         self.numSamples = numSamples
+        self.scale = scale
         self.concentration = concentration
         self.maxCats = maxCats
         self.covType = covType
@@ -300,10 +304,10 @@ class Learner:
 
         #Perception bias
         if self.contextless_bias:
-            self.samples, self.labels = self.inputLanguage.sample(self.numSamples, seed=self.seed, shift=self.contextless_bias, threshold=self.threshold, get_labels=True)
+            self.samples, self.labels = self.inputLanguage.sample(self.numSamples, seed=self.seed, shift=self.contextless_bias, threshold=self.threshold, get_labels=True, scale=self.scale)
         #No perception bias
         else:
-            self.samples, self.labels = self.inputLanguage.sample(self.numSamples, seed = self.seed, get_labels=True)
+            self.samples, self.labels = self.inputLanguage.sample(self.numSamples, seed = self.seed, get_labels=True, scale=self.scale)
 
         # Fit model
         self.dpgmm = mixture.BayesianGaussianMixture(weight_concentration_prior=self.concentration,
@@ -354,6 +358,7 @@ class Learner:
         """
         Returns the ARI between model predicted categories and the categories predicted by the input language, modified so
         to ignore nasality (all input language categories set to have the mean same nasality)
+        Assumes that ideal language has uniform prior over categories
         :return: float
         """
         #TODO: test this function
