@@ -5,16 +5,20 @@ import dirichlet_hyperparam_search
 import os
 #from dirichlet_hyperparam_search import nasal_splits
 
-def define_ideal_start(coartic_strength=.2):
+def define_ideal_start(coartic_strength=.2, name_nas = False):
     """
         Sets up a simple baseline language with 2 height categories, both with a slight sub-category shift for nasality
         :param coartic_strength difference between nasal and oral contexts in nasality
+        :param name_nas: names categories with nasality shift "nasal"
         :return: a Language with 4 categories, named "ideal start"
         """
     high_or = Category.build_params(mean_nasality=1, mean_height=5, s_nasality=.75, s_height=.75, c_nasality_height=-0)
     high_nas = Category.build_params(mean_nasality=1 + coartic_strength, mean_height=5, s_nasality=.75, s_height=.75, c_nasality_height=-0)
     low_or = Category.build_params(mean_nasality=1, mean_height=0, s_nasality=.75, s_height=.75, c_nasality_height=0)
     low_nas = Category.build_params(mean_nasality=1 + coartic_strength, mean_height=0, s_nasality=.75, s_height=.75, c_nasality_height=0)
+    if name_nas:
+        high_nas.name = "nasal"
+        low_nas.name = "nasal"
     return Language(vowels=[high_or, high_nas, low_or, low_nas], name="ideal_start")
 
 def plot_nas_generations(learners:list, savefilename:str = None):
@@ -96,7 +100,8 @@ if __name__ == "__main__":
     concen = 1.6e-07
     max_iters = 3000
     numSamples = 300
-    bias = .15
+    #bias = .15
+    bias = 1.2
     threshold = 1.75
     numGens = 4
     scale = True

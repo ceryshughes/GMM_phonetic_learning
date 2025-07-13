@@ -576,8 +576,13 @@ if __name__ == "__main__":
     snapshot_sample(bi_mean=[1,4], bi_var=[0.25, 0.25],
                     bin_mean=[1.75,4], bin_var=[0.25,0.25],
                     ba_mean=[1,0.5],ba_var=[0.25,0.25],
-                    ban_mean=[1.75,0.5], ban_var=[0.25,0.25], n_samples=n_samples,
+                    ban_mean=[2.25,0.5], ban_var=[0.25,0.25], n_samples=n_samples,
                     plot_name="starting_stage_bigger_diff.pdf")
+    snapshot_sample(bi_mean=[1, 4], bi_var=[0.25, 0.25],
+                    bin_mean=[1.75, 4], bin_var=[0.25, 0.25],
+                    ba_mean=[1.5, 0.5], ba_var=[0.25, 0.25],
+                    ban_mean=[2.25, 0.5], ban_var=[0.25, 0.25], n_samples=n_samples,
+                    plot_name="starting_stage_shift.pdf")
     snapshot_sample(bi_mean=[1,4], bi_var=[0.25, 0.25],
                     bin_mean=[2.5,4], bin_var=[0.25,0.25],
                     ba_mean=[1,0.5],ba_var=[0.25,0.25],

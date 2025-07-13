@@ -24,14 +24,16 @@ class Category:
     centered on the category's mean nasality, height with the category's covariance matrix
     """
 
-    def __init__(self, mean, cov):
+    def __init__(self, mean:list, cov:list, name:str = None):
         """
         Defines this.mean and this.cov
         :param mean: Should be 1x2 (list) of mean nasality, mean_height
         :param cov: Should be 2x2 covariance matrix (list of lists) for nasality and height
+        :param name: optional, string name for category
         """
         self.mean = mean
         self.cov = cov
+        self.name = name
 
     @classmethod
     def build_params(cls, mean_nasality: float, mean_height: float, s_nasality: float, s_height: float,
@@ -82,7 +84,7 @@ class Category:
         :param num_samples: number of samples
         :param seed: random seed for sample generation
         :param shift: size of bias
-        :param threshold height value resulting in a biased nasality sample
+        :param threshold height value resulting in a biased nasality sample (shift vowels lower than this height)
         :return: numpy array of shifted samples
         """
         sample = self.sample(num_samples, seed)
@@ -110,10 +112,10 @@ class Language:
 
     def __init__(self, vowels:list=None, name:str=None, priors:list = None):
         """
-        Initializes LanguageInput with vowel categories
-        :param vowels If vowels is None, initializes LanguageInput with empty list of vowel categories
+        Initializes LanguageInput with vowel categories (each is a Category object)
+        :param vowels If vowels is None, initializes LanguageInput with empty list of vowel Categories
         :param name optional string name for labeling this language
-        :param priors list of relative frequency of each vowel category, in order based on the order of self.vowels.
+        :param priors list of relative frequency of each vowel Category, in order based on the order of self.vowels.
          If None, set to 1 for each category
         """
         self.vowels = vowels if vowels else []
@@ -130,7 +132,7 @@ class Language:
         :param get_labels: Boolean, whether to return a data structure with category labels
         :param shift: If not None, the amount to shift nasality samples by, if they meet threshold
         :param threshold: If not None, the height value required of a sample for its nasality values to be biased
-        :param shift_categories: If not None, the list of category names (str) that should be shifted by shift amount
+        :param shift_categories: If not None, the list of category names (str) that should be shifted by shift amount if they meet the threshold height value
         :param scale: If True, scale the number of samples per category by its corresponding value in self.priors
         :return: numpy array of shape num_samples_per_cat * number of categories x 2;
          if labels, also return array of shape num samples per cat * number of categories * 1 - a list where each item
@@ -144,25 +146,28 @@ class Language:
         else:
             adjusted_num_samples_per_cat = [num_samples_per_cat for vowel in self.vowels]
 
-        if threshold:
-            samples = np.concatenate(tuple(
-                [vowel.threshold_shift_sample(adjusted_num_samples_per_cat[index], seed=seed, threshold=threshold, shift=shift) for
-                 index,vowel in enumerate(self.vowels)]))
-        elif shift_categories:
+        if shift_categories:
             #Todo: test category shift
             cat_samples = []
             for index,vowel in enumerate(self.vowels):
-                if vowel.name in shift_categories:
+                if vowel.name in shift_categories: #Only apply height threshold shift to selected categories
                     cat_samples.append(vowel.threshold_shift_sample(adjusted_num_samples_per_cat[index], seed=seed, threshold=threshold, shift=shift))
                 else:
                     cat_samples.append(vowel.sample(adjusted_num_samples_per_cat[index], seed=seed))
-            samples = np.concatenate(tuple(cat_samples))
+            samples = np.concatenate(tuple(cat_samples)) #Combine samples
+        elif threshold:
+            samples = np.concatenate(tuple( #Apply height threshold shift to all categories
+                [vowel.threshold_shift_sample(adjusted_num_samples_per_cat[index], seed=seed, threshold=threshold,
+                                              shift=shift) for
+                 index, vowel in enumerate(self.vowels)]))
         else:
+            #No shift
             #samples = np.concatenate(tuple([vowel.sample(num_samples_per_cat, seed=seed) for vowel in self.vowels]))
             samples = np.concatenate(tuple([vowel.sample(adjusted_num_samples_per_cat[index], seed=seed) for index,vowel in enumerate(self.vowels)]))
         if not get_labels:
             return samples
         #label_array = np.concatenate(tuple([[index] * num_samples_per_cat for index, vowel in enumerate(self.vowels)]))
+        #Create data structure of category labels, based on order and number of samples added from each category
         label_array = np.concatenate(tuple([[index] * adjusted_num_samples_per_cat[index] for index, vowel in enumerate(self.vowels)]))
         if debug:
             print("Labels:", get_labels)
@@ -261,7 +266,9 @@ class Learner:
                  seed: int = 1,
                  name: str = None,
                  contextless_bias: float = None,
-                 threshold: float = None):
+                 threshold: float = None,
+                 context_bias_categories: list = None
+                 ):
         """
         Initializes a Learner object with the following properties
         :param inputLanguage: Language object that generates the learning input
@@ -276,6 +283,7 @@ class Learner:
         :param name: optional string name for this learner
         :param contextless_bias: Value to shift learning input samples by along the nasality dimension, if they fall below the height threshold
         :param threshold: Value where learning input samples with a height below this value are shifted in nasality by bias
+        :param context_bias_categories: List of string, names of categories to apply the threshold+contextless_bias to. If None, contextless_bias applies to all categories that meet the threshold.
 
         Runs the learner with the input language and creates the following properties:
         dpgmm: BayesianGaussianMixture object fit to samples from the inputLanugae (numSamples samples per category)
@@ -293,6 +301,7 @@ class Learner:
         self.seed = seed
         self.name = name
         self.contextless_bias = contextless_bias
+        self.context_bias_categories = context_bias_categories
         self.threshold = threshold
         self.effective_cats = None
         self.category_counts = None
@@ -300,11 +309,12 @@ class Learner:
         self.height_ari = None
 
 
+
         # Generate samples from input language
 
         #Perception bias
         if self.contextless_bias:
-            self.samples, self.labels = self.inputLanguage.sample(self.numSamples, seed=self.seed, shift=self.contextless_bias, threshold=self.threshold, get_labels=True, scale=self.scale)
+            self.samples, self.labels = self.inputLanguage.sample(self.numSamples, seed=self.seed, shift=self.contextless_bias, threshold=self.threshold, get_labels=True, scale=self.scale, shift_categories=self.context_bias_categories)
         #No perception bias
         else:
             self.samples, self.labels = self.inputLanguage.sample(self.numSamples, seed = self.seed, get_labels=True, scale=self.scale)
